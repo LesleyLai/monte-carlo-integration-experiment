@@ -5,8 +5,6 @@ mod variance_estimator;
 use crate::variance_estimator::VarianceEstimator;
 use rand::prelude::*;
 use rayon::prelude::*;
-use std::cell::RefCell;
-use thread_local::ThreadLocal;
 
 // Estimate integral from a to b of f(x) dx
 fn monte_carlo_integration(
@@ -33,18 +31,17 @@ fn test_monte_carlo_integration(
     println!("Estimate {f_desc}. Expected result: {expected}");
     for i in 0..8 {
         let sample_count = 2_usize.pow(i);
-        let tl = ThreadLocal::new();
 
-        (0..128).into_iter().for_each(|_| {
-            let result = monte_carlo_integration(f, a, b, sample_count);
-
-            let cell = tl.get_or(|| RefCell::new(VarianceEstimator::new()));
-            cell.borrow_mut().add(result);
-        });
-
-        let ve = tl.into_iter().fold(VarianceEstimator::new(), |a, b| {
-            VarianceEstimator::merge(&a, &b.borrow())
-        });
+        let ve = (0..128)
+            .into_par_iter()
+            .fold(VarianceEstimator::new, |mut ve, _| {
+                let result = monte_carlo_integration(f, a, b, sample_count);
+                ve.add_sample(result);
+                ve
+            })
+            .reduce(VarianceEstimator::new, |a, b| {
+                VarianceEstimator::merge(a, b)
+            });
 
         println!(
             "sample count: {}, mean of means: {:.2}, variance: {:.1e}",

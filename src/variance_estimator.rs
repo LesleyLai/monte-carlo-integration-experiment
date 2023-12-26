@@ -16,7 +16,7 @@ impl VarianceEstimator {
         }
     }
 
-    pub fn add(&mut self, x: f64) {
+    pub fn add_sample(&mut self, x: f64) {
         self.sample_count += 1;
         let delta = x - self.mean;
         self.mean += delta / (self.sample_count as f64);
@@ -41,9 +41,9 @@ impl VarianceEstimator {
         }
     }
 
-    pub fn merge(lhs: &Self, rhs: &Self) -> Self {
+    pub fn merge(lhs: Self, rhs: Self) -> Self {
         if rhs.sample_count == 0 {
-            return *lhs;
+            return lhs;
         }
 
         let left_sample_count_f64 = lhs.sample_count as f64;
@@ -71,16 +71,12 @@ mod tests {
     use super::*;
     use approx_eq::assert_approx_eq;
     use rayon::prelude::*;
-    use std::cell::RefCell;
-    use thread_local::ThreadLocal;
 
     #[test]
     fn test_all_same() {
         const CONSTANT: f64 = 42.0;
         let mut ve = VarianceEstimator::new();
-        for _ in 0..100 {
-            ve.add(CONSTANT);
-        }
+        (0..100).for_each(|_| ve.add_sample(CONSTANT));
         assert_eq!(ve.mean, CONSTANT);
         assert_eq!(ve.variance(), 0.0);
         assert_eq!(ve.relative_variance(), 0.0);
@@ -90,7 +86,7 @@ mod tests {
     fn test_range() {
         let mut ve = VarianceEstimator::new();
         // An integer sequence from 0 to 100 has an variance around 841.67
-        (0..100).for_each(|i| ve.add(i as f64));
+        (0..100).for_each(|i| ve.add_sample(i as f64));
 
         assert_eq!(ve.mean, 49.5);
         assert_approx_eq!(ve.variance(), 841.67, 0.01);
@@ -103,10 +99,10 @@ mod tests {
         let mut ve2 = VarianceEstimator::new();
 
         // An integer sequence from 0 to 200 has an variance around 3350
-        (0..100).for_each(|i| ve1.add(i as f64));
-        (100..200).for_each(|i| ve2.add(i as f64));
+        (0..100).for_each(|i| ve1.add_sample(i as f64));
+        (100..200).for_each(|i| ve2.add_sample(i as f64));
 
-        let ve = VarianceEstimator::merge(&ve1, &ve2);
+        let ve = VarianceEstimator::merge(ve1, ve2);
 
         assert_eq!(ve.mean, 99.5);
         assert_approx_eq!(ve.variance(), 3350.0, 0.01);
@@ -115,20 +111,15 @@ mod tests {
 
     #[test]
     fn test_concurrent_accumulate() {
-        let tl = ThreadLocal::new();
         // An integer sequence from 0 to 10000 has an variance around 8334166.67
-        (0..10000).into_par_iter().for_each(|i| {
-            let mut cell = tl.get_or(|| RefCell::new(VarianceEstimator::new()));
-            cell.borrow_mut().add(i as f64);
-        });
-
-        let variance = tl
-            .into_iter()
-            .fold(VarianceEstimator::new(), |a, b| {
-                VarianceEstimator::merge(&a, &b.borrow())
+        let ve = (0..10000)
+            .into_par_iter()
+            .fold(VarianceEstimator::new, |mut ve, i| {
+                ve.add_sample(i as f64);
+                ve
             })
-            .variance();
+            .reduce(VarianceEstimator::new, VarianceEstimator::merge);
 
-        assert_approx_eq!(variance, 8334166.67, 0.01);
+        assert_approx_eq!(ve.variance(), 8334166.67, 0.01);
     }
 }
